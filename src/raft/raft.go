@@ -28,6 +28,25 @@ import (
 	"6.5840/labrpc"
 )
 
+const MinElectionTimeout = 500
+const MaxElectionTimeout = 1000
+
+func randTimeout() time.Duration {
+	randTimeout := MinElectionTimeout + rand.Intn(MaxElectionTimeout-MinElectionTimeout)
+	return time.Duration(randTimeout) * time.Millisecond
+}
+
+const (
+	Follower = iota
+	Candidate
+	Leader
+)
+
+type CommandTerm struct {
+	Command interface{}
+	Term 	int
+}
+
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -62,6 +81,21 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	status 			int
+	applyMsg 		chan ApplyMsg
+	// Persistant state on all servers
+	currentTerm		int
+	votedFor		int
+	log 			[]CommandTerm
+	commitIndex	int
+	lastApplied		int
+	// keep index of last log
+	lastLogIndex	int
+	nextIndex		[]int
+	matchIndex		[]int
+	// keep the last time raft object accessed from the leader
+	// to avoid unnecessary voting
+	lastAccessed	time.Time
 }
 
 // return currentTerm and whether this server
@@ -127,18 +161,57 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
-	// Your data here (2A).
+	Term        int
+	VoteGranted bool
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// already voted for candidate, return directly
+	if rf.currentTerm == args.Term && rf.votedFor == args.CandidateId {
+		reply.VoteGranted, reply.Term = true, rf.currentTerm
+		return
+	}
+	// current term is bigger than requester's, reject vote request
+	// current term is equal to requesters's, but vote for some server else, reject vote request
+	if rf.currentTerm > args.Term || (rf.currentTerm == args.Term && rf.votedFor != -1) {
+		reply.Term, reply.VoteGranted = rf.currentTerm, false
+		return
+	}
+	// requester's term is bigger than current term
+	if args.Term > rf.currentTerm {
+		rf.currentTerm, rf.votedFor = args.Term, -1
+		rf.status = Follower
+	}
+	reply.Term = args.Term
+	// requester's log term is same as current server's
+	// but current server has more logs of current term
+	// reject requester's vote request
+	if rf.lastLogIndex - 1 >= 0 {
+		lastLogTerm := rf.log[rf.lastLogIndex - 1].Term
+		if lastLogTerm > args.LastLogTerm || 
+						(lastLogTerm == args.LastLogTerm && rf.lastLogIndex > args.LastLogIndex) {
+							reply.VoteGranted = false
+							return
+						}
+	}
+	rf.status = Follower
+	rf.lastAccessed = time.Now()
+	reply.VoteGranted = true
+	rf.votedFor = args.CandidateId
+	rf.persist()
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -247,6 +320,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.status = Follower
+	rf.log = []CommandTerm{
+				{
+				Command: nil,
+				Term:	0,
+				},
+			}
+	rf.votedFor = -1
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.applyMsg = applyCh
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -256,4 +340,145 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 
 	return rf
+}
+
+// Check whether candidate haven't receive heartbeat from leader 
+// if time elapsed over election timeout interval
+// if true, change current server status to candidate and start voting for itself
+func (rf *Raft) manageFollower() {
+	duration := randTimeout();
+	time.Sleep(duration)
+	rf.mu.Lock()
+	lastAccessed := rf.lastAccessed
+	rf.mu.Unlock()
+	if time.Now().Sub(lastAccessed).Milliseconds() >= duration.Milliseconds() {
+		rf.mu.Lock()
+		rf.status = Candidate
+		rf.currentTerm++
+		rf.votedFor = -1
+		rf.persist()
+		rf.mu.Unlock()
+	}
+}
+
+func(rf *Raft) manageCandidate() {
+	timeOut := randTimeout()
+	start := time.Now()
+	rf.mu.Lock()
+	peers := rf.peers
+	me := rf.me
+	term := rf.currentTerm
+	lastLogIndex := rf.lastLogIndex
+	lastLogTerm := rf.log[lastLogIndex].Term
+	rf.mu.Unlock()
+	count := 0
+	total := len(peers)
+	finished := 0
+	majority := (total / 2) + 1
+	for peer := range peers {
+		if me == peer {
+			rf.mu.Lock()
+			count++
+			finished++
+			rf.mu.Unlock()
+			continue
+		}
+
+		go func(peer int) {
+			args := RequestVoteArgs{}
+			args.Term = term
+			args.CandidateId = me
+			args.LastLogIndex = lastLogIndex
+			args.LastLogTerm = lastLogTerm
+			reply := RequestVoteReply{}
+			ok := rf.sendRequestVote(peer, &args, &reply)
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			if !ok {
+				finished++
+				return
+			}
+			if reply.VoteGranted {
+				finished++
+				count++
+			} else {
+				finished++
+				if args.Term < reply.Term {
+					rf.status = Follower
+					rf.persist()
+				}
+			}
+		}(peer)
+	}
+	for {
+		rf.mu.Lock()
+		if count >= majority || finished == total || time.Now().Sub(start).Milliseconds() >= timeOut.Milliseconds() {
+			break
+		}
+		rf.mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if time.Now().Sub(start).Milliseconds() >= timeOut.Milliseconds() {
+		rf.status = Follower
+		rf.mu.Unlock()
+		return
+	}
+	if rf.status == Candidate && count >= majority {
+		rf.status = Leader
+		for peer := range peers {
+			rf.nextIndex[peer] = rf.lastLogIndex + 1
+		}
+	} else {
+		rf.status = Follower
+	}
+	rf.persist()
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) manageLeader() {
+	rf.mu.Lock()
+	me := rf.me
+	term := rf.currentTerm
+	commitIndex := rf.commitIndex
+	peers := rf.peers
+	nextIndex := rf.nextIndex
+
+	lastLogIndex := rf.lastLogIndex
+	matchIndex := rf.matchIndex
+	nextIndex[me] = lastLogIndex + 1
+	matchIndex[me] = lastLogIndex
+	log := rf.log
+	rf.mu.Unlock()
+	// check log replicated to most peers and acked
+	// if acked by most peers, this log can be committed to state machine and reply
+	for n := commitIndex + 1; n <= lastLogIndex; n++ {
+		count := 0
+		total := len(peers)
+		majority := (total / 2) + 1
+		for peer := range peers {
+			if matchIndex[peer] >= n && log[n].Term == term {
+				count++
+			}
+		}
+		if count >= majority {
+			rf.mu.Lock()
+			i := rf.commitIndex + 1
+			for ; i <= n; i++ {
+				rf.applyMsg <- ApplyMsg {
+					CommandValid: true,
+					Command: log[i].Command,
+					CommandIndex: i,
+				}
+				rf.commitIndex = rf.commitIndex + 1
+			}
+			rf.mu.Unlock()
+		}
+	}
+	// do log replication here
+	for peer := range peers {
+		if peer == me {
+			continue
+		}
+	}
 }
