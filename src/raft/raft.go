@@ -51,9 +51,8 @@ const (
 
 type CommandTerm struct {
 	Command interface{}
-	Term 	int
+	Term    int
 }
-
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -88,21 +87,21 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	status 			int
-	applyMsg 		chan ApplyMsg
+	status   int
+	applyMsg chan ApplyMsg
 	// Persistant state on all servers
-	currentTerm		int
-	votedFor		int
-	log 			[]CommandTerm
-	commitIndex	int
-	lastApplied		int
+	currentTerm int
+	votedFor    int
+	log         []CommandTerm
+	commitIndex int
+	lastApplied int
 	// keep index of last log
-	lastLogIndex	int
-	nextIndex		[]int
-	matchIndex		[]int
+	lastLogIndex int
+	nextIndex    []int
+	matchIndex   []int
 	// keep the last time raft object accessed from the leader
 	// to avoid unnecessary voting
-	lastAccessed	time.Time
+	lastAccessed time.Time
 }
 
 // return currentTerm and whether this server
@@ -128,15 +127,14 @@ func (rf *Raft) GetState() (int, bool) {
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
 	// Your code here (2C).
-	 w := new(bytes.Buffer)
-	 e := labgob.NewEncoder(w)
-	 e.Encode(rf.currentTerm)
-	 e.Encode(rf.votedFor)
-	 e.Encode(rf.log)
-	 data := w.Bytes()
-	 rf.persister.Save(data, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.Save(data, nil)
 }
-
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
@@ -152,13 +150,12 @@ func (rf *Raft) readPersist(data []byte) {
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&rf.log) != nil {
 
-		} else {
-			rf.currentTerm = currentTerm
-			rf.votedFor = votedFor
-			rf.lastLogIndex = len(rf.log) - 1
-		}
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.lastLogIndex = len(rf.log) - 1
+	}
 }
-
 
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
@@ -168,7 +165,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 
 }
-
 
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -187,20 +183,20 @@ type RequestVoteReply struct {
 }
 
 type AppendEntriesArgs struct {
-	Term 		int
-	LeaderId 	int
-	PrevLogIndex	int
-	PrevLogTerm		int
-	Entry			[]CommandTerm
-	LeaderCommit	int
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entry        []CommandTerm
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-	Term 		int
-	Success		bool
-	Xterm		int
-	XIndex		int
-	XLen		int
+	Term    int
+	Success bool
+	Xterm   int
+	XIndex  int
+	XLen    int
 }
 
 // example RequestVote RPC handler.
@@ -228,13 +224,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// requester's log term is same as current server's
 	// but current server has more logs of current term
 	// reject requester's vote request
-	if rf.lastLogIndex - 1 >= 0 {
-		lastLogTerm := rf.log[rf.lastLogIndex - 1].Term
-		if lastLogTerm > args.LastLogTerm || 
-						(lastLogTerm == args.LastLogTerm && rf.lastLogIndex > args.LastLogIndex) {
-							reply.VoteGranted = false
-							return
-						}
+	if rf.lastLogIndex-1 >= 0 {
+		lastLogTerm := rf.log[rf.lastLogIndex-1].Term
+		if lastLogTerm > args.LastLogTerm ||
+			(lastLogTerm == args.LastLogTerm && rf.lastLogIndex > args.LastLogIndex) {
+			reply.VoteGranted = false
+			return
+		}
 	}
 	rf.status = Follower
 	rf.lastAccessed = time.Now()
@@ -275,7 +271,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -291,14 +286,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	// not continous, return
-	if len(rf.log) < args.PrevLogIndex + 1 {
+	if len(rf.log) < args.PrevLogIndex+1 {
 		return
 	}
 
 	// current server's log conflict with leader's, find the first index of conflict term
 	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Xterm = rf.log[args.PrevLogIndex].Term
-		for i, v:= range rf.log {
+		for i, v := range rf.log {
 			if v.Term == reply.Xterm {
 				// find first log index of conflict term
 				reply.XIndex = i
@@ -309,19 +304,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	index := 0
-	// current server 
+	// current server
 	for ; index < len(args.Entry); index++ {
 		// caculate current log index
 		currentIndex := args.PrevLogIndex + 1 + index
-		if currentIndex > len(rf.log) - 1 {
-			// find the continous place, append log from this index to 
+		if currentIndex > len(rf.log)-1 {
+			// find the continous place, append log from this index to
 			// current servers log batch
-			break;
+			break
 		}
 
 		if rf.log[currentIndex].Term != args.Entry[index].Term {
 			// if current server's log conflict with leader's at currentIndex
-			// cut off log of range [currentIndex, end] in current server's 
+			// cut off log of range [currentIndex, end] in current server's
 			// log batch
 			rf.log = rf.log[:currentIndex]
 			rf.lastLogIndex = len(rf.log) - 1
@@ -338,7 +333,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.lastLogIndex = len(rf.log) - 1
 		rf.persist()
 	}
-	
+
 	// commit log by commit index transfered from leader
 
 	if args.LeaderCommit > rf.commitIndex {
@@ -346,9 +341,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		min := min(args.LeaderCommit, rf.lastLogIndex)
 		for i := rf.commitIndex + 1; i <= min; i++ {
 			rf.commitIndex = i
-			rf.applyMsg <- ApplyMsg {
+			rf.applyMsg <- ApplyMsg{
 				CommandValid: true,
-				Command: rf.log[i].Command,
+				Command:      rf.log[i].Command,
 				CommandIndex: i,
 			}
 		}
@@ -359,7 +354,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
-
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -379,7 +373,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -409,7 +402,6 @@ func (rf *Raft) ticker() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
 
-
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
@@ -436,11 +428,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.status = Follower
 	rf.log = []CommandTerm{
-				{
-				Command: nil,
-				Term:	0,
-				},
-			}
+		{
+			Command: nil,
+			Term:    0,
+		},
+	}
 	rf.votedFor = -1
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
@@ -452,15 +444,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
-
 	return rf
 }
 
-// Check whether candidate haven't receive heartbeat from leader 
+// Check whether candidate haven't receive heartbeat from leader
 // if time elapsed over election timeout interval
 // if true, change current server status to candidate and start voting for itself
 func (rf *Raft) manageFollower() {
-	duration := randTimeout();
+	duration := randTimeout()
 	time.Sleep(duration)
 	rf.mu.Lock()
 	lastAccessed := rf.lastAccessed
@@ -475,7 +466,7 @@ func (rf *Raft) manageFollower() {
 	}
 }
 
-func(rf *Raft) manageCandidate() {
+func (rf *Raft) manageCandidate() {
 	timeOut := randTimeout()
 	start := time.Now()
 	rf.mu.Lock()
@@ -579,9 +570,9 @@ func (rf *Raft) manageLeader() {
 			rf.mu.Lock()
 			i := rf.commitIndex + 1
 			for ; i <= n; i++ {
-				rf.applyMsg <- ApplyMsg {
+				rf.applyMsg <- ApplyMsg{
 					CommandValid: true,
-					Command: log[i].Command,
+					Command:      log[i].Command,
 					CommandIndex: i,
 				}
 				rf.commitIndex = rf.commitIndex + 1
