@@ -585,5 +585,55 @@ func (rf *Raft) manageLeader() {
 		if peer == me {
 			continue
 		}
+
+		args := AppendEntriesArgs{}
+		reply := AppendEntriesReply{}
+		rf.mu.Lock()
+		args.Term = rf.currentTerm
+		prevLogIndex := nextIndex[peer] - 1
+		args.PrevLogIndex = prevLogIndex
+		args.PrevLogTerm = rf.log[prevLogIndex].Term
+		args.LeaderCommit = rf.commitIndex
+		args.LeaderId = rf.me
+		if nextIndex[peer] <= lastLogIndex {
+			args.Entry = rf.log[prevLogIndex+1 : lastLogIndex+1]
+		}
+		rf.mu.Unlock()
+
+		// execute appending entries
+		go func(peer int) {
+			ok := rf.sendAppendEntries(peer, &args, &reply)
+			if !ok {
+				return
+			}
+
+			rf.mu.Lock()
+			if reply.Success {
+				rf.nextIndex[peer] = min(rf.nextIndex[peer]+len(args.Entry), rf.lastLogIndex+1)
+				rf.matchIndex[peer] = prevLogIndex + len(args.Entry)
+			} else {
+				if reply.Term > args.Term {
+					rf.status = Follower
+					rf.mu.Unlock()
+					return
+				}
+				index := -1
+				// if leader has the conflict term, set peers next
+				// to the last log index of this term
+				for i, v := range rf.log {
+					if v.Term == reply.Xterm {
+						index = i
+					}
+				}
+				if index == -1 {
+					// if leader cannot find log of Xterm
+					// set peers next to XIndex to improve efficiency
+					rf.nextIndex[peer] = reply.XIndex
+				} else {
+					rf.nextIndex[peer] = index
+				}
+			}
+			rf.mu.Unlock()
+		}(peer)
 	}
 }
