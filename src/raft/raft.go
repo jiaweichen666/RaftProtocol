@@ -18,13 +18,13 @@ package raft
 //
 
 import (
-	//	"bytes"
+	//"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.5840/labgob"
+	//"6.5840/labgob"
 	"6.5840/labrpc"
 )
 
@@ -34,6 +34,13 @@ const MaxElectionTimeout = 1000
 func randTimeout() time.Duration {
 	randTimeout := MinElectionTimeout + rand.Intn(MaxElectionTimeout-MinElectionTimeout)
 	return time.Duration(randTimeout) * time.Millisecond
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 const (
@@ -174,6 +181,23 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
+type AppendEntriesArgs struct {
+	Term 		int
+	LeaderId 	int
+	PrevLogIndex	int
+	PrevLogTerm		int
+	Entry			[]CommandTerm
+	LeaderCommit	int
+}
+
+type AppendEntriesReply struct {
+	Term 		int
+	Success		bool
+	Xterm		int
+	XIndex		int
+	XLen		int
+}
+
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
@@ -244,6 +268,86 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
+}
+
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Xterm = -1
+	reply.XIndex = -1
+	reply.XLen = len(rf.log)
+	reply.Success = false
+	reply.Term = rf.currentTerm
+	// request from older leader, reject
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	// not continous, return
+	if len(rf.log) < args.PrevLogIndex + 1 {
+		return
+	}
+
+	// current server's log conflict with leader's, find the first index of conflict term
+	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		reply.Xterm = rf.log[args.PrevLogIndex].Term
+		for i, v:= range rf.log {
+			if v.Term == reply.Xterm {
+				// find first log index of conflict term
+				reply.XIndex = i
+				break
+			}
+		}
+		return
+	}
+
+	index := 0
+	// current server 
+	for ; index < len(args.Entry); index++ {
+		// caculate current log index
+		currentIndex := args.PrevLogIndex + 1 + index
+		if currentIndex > len(rf.log) - 1 {
+			// find the continous place, append log from this index to 
+			// current servers log batch
+			break;
+		}
+
+		if rf.log[currentIndex].Term != args.Entry[index].Term {
+			// if current server's log conflict with leader's at currentIndex
+			// cut off log of range [currentIndex, end] in current server's 
+			// log batch
+			rf.log = rf.log[:currentIndex]
+			rf.lastLogIndex = len(rf.log) - 1
+			rf.persist()
+			break
+		}
+	}
+
+	reply.Success = true
+	rf.lastAccessed = time.Now()
+	// append logs from leader to current server's log batch tail
+	if len(args.Entry) > 0 {
+		rf.log = append(rf.log, args.Entry[index:]...)
+		rf.lastLogIndex = len(rf.log) - 1
+		rf.persist()
+	}
+	
+	// commit log by commit index transfered from leader
+
+	if args.LeaderCommit > rf.commitIndex {
+		// commit log index should smaller than max log index of current server
+		min := min(args.LeaderCommit, rf.lastLogIndex)
+		for i := rf.commitIndex + 1; i <= min; i++ {
+			rf.commitIndex = i
+			rf.applyMsg <- ApplyMsg {
+				CommandValid: true,
+				Command: rf.log[i].Command,
+				CommandIndex: i,
+			}
+		}
+	}
 }
 
 
