@@ -372,8 +372,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := -1
 	isLeader := true
 
-	// Your code here (2B).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	isLeader = rf.status == Leader
+	if !isLeader {
+		return 0, 0, false
+	}
+	term = rf.currentTerm
+	rf.log = append(rf.log, CommandTerm{
+		Command: command,
+		Term:    term,
+	})
+	rf.lastLogIndex = len(rf.log) - 1
+	index = rf.lastLogIndex
+	rf.persist()
 	return index, term, isLeader
 }
 
@@ -401,10 +413,20 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-
+		rf.mu.Lock()
+		status := rf.status
+		rf.mu.Unlock()
+		if status == Follower {
+			rf.manageFollower()
+		} else if status == Candidate {
+			rf.manageCandidate()
+		} else if status == Leader {
+			rf.manageLeader()
+		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		//ms := 50 + (rand.Int63() % 300)
+		ms := 100
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
