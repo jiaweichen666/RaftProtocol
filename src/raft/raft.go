@@ -639,6 +639,12 @@ func (rf *Raft) manageLeader() {
 					rf.mu.Unlock()
 					return
 				}
+
+				if reply.Xterm == -1 {
+					rf.nextIndex[peer] = reply.XLen
+					rf.mu.Unlock()
+					return
+				}
 				index := -1
 				// if leader has the conflict term, set peers next
 				// to the last log index of this term
