@@ -49,7 +49,7 @@ const (
 	Leader
 )
 
-type CommandTerm struct {
+type LogEntry struct {
 	Command interface{}
 	Term    int
 }
@@ -92,7 +92,7 @@ type Raft struct {
 	// Persistant state on all servers
 	currentTerm int
 	votedFor    int
-	log         []CommandTerm
+	log         []LogEntry
 	commitIndex int
 	lastApplied int
 	// keep index of last log
@@ -187,7 +187,7 @@ type AppendEntriesArgs struct {
 	LeaderId     int
 	PrevLogIndex int
 	PrevLogTerm  int
-	Entry        []CommandTerm
+	Entry        []LogEntry
 	LeaderCommit int
 }
 
@@ -379,7 +379,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return 0, 0, false
 	}
 	term = rf.currentTerm
-	rf.log = append(rf.log, CommandTerm{
+	rf.log = append(rf.log, LogEntry{
 		Command: command,
 		Term:    term,
 	})
@@ -449,7 +449,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.status = Follower
-	rf.log = []CommandTerm{
+	rf.log = []LogEntry{
 		{
 			Command: nil,
 			Term:    0,
