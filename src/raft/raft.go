@@ -131,7 +131,7 @@ type Raft struct {
 func (rf *Raft) TruncateLogs(lastIndex int, lastTerm int) {
 	index := -1
 	for i := len(rf.log) - 1; i >= 0; i-- {
-		if (rf.log[i].Index == rf.lastIndexOfSnapshot && rf.log[i].Term == rf.lastTermOfSnapshot) {
+		if rf.log[i].Index == rf.lastIndexOfSnapshot && rf.log[i].Term == rf.lastTermOfSnapshot {
 			index = i
 			break
 		}
@@ -141,7 +141,7 @@ func (rf *Raft) TruncateLogs(lastIndex int, lastTerm int) {
 		rf.log = []LogEntry{}
 	} else {
 		// reserve logs after index, log of index not included
-		rf.log = append([]LogEntry{}, rf.log[index + 1:]...)
+		rf.log = append([]LogEntry{}, rf.log[index+1:]...)
 	}
 	// update meta
 	rf.lastIndexOfSnapshot = lastIndex
@@ -191,8 +191,40 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	d.Decode(&rf.currentTerm)
 	d.Decode(&rf.votedFor)
-	d.Decode(&rf.log)g
+	d.Decode(&rf.log)
+	// TODO:need fix
 	rf.lastLogIndex = len(rf.log) - 1
+}
+
+// read snapshot from persistant storage
+// lastIndex and lastTerm are included in snapshot buffer
+func (rf *Raft) readSnapshot(data []byte) {
+	if data == nil || len(data) == 0 {
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	// use intermidiate var to reduce the scope of the lock
+	// aim to get better performance
+	lastIndexOfSnapshot, lastTermOfSnapshot := 0, 0
+	d.Decode(&lastIndexOfSnapshot)
+	d.Decode(&lastTermOfSnapshot)
+	rf.mu.Lock()
+	rf.lastIndexOfSnapshot = lastIndexOfSnapshot
+	rf.lastTermOfSnapshot = lastTermOfSnapshot
+	rf.commitIndex = lastIndexOfSnapshot
+	rf.lastApplied = lastIndexOfSnapshot
+	rf.TruncateLogs(lastIndexOfSnapshot, lastTermOfSnapshot)
+	rf.mu.Unlock()
+	// we need to update apply index
+	go func() {
+		rf.applyMsg <- ApplyMsg{
+			SnapshotValid: true,
+			Snapshot:      data,
+			SnapshotTerm:  lastTermOfSnapshot,
+			SnapshotIndex: lastIndexOfSnapshot,
+		}
+	}()
 }
 
 // the service says it has created a snapshot that has
