@@ -125,6 +125,29 @@ type Raft struct {
 	lastTermOfSnapshot int
 }
 
+// truncate logs from begin to lastIndex
+// lastIndex log is included
+// all these logs are included in snapshot
+func (rf *Raft) TruncateLogs(lastIndex int, lastTerm int) {
+	index := -1
+	for i := len(rf.log) - 1; i >= 0; i-- {
+		if (rf.log[i].Index == rf.lastIndexOfSnapshot && rf.log[i].Term == rf.lastTermOfSnapshot) {
+			index = i
+			break
+		}
+	}
+	if index <= -1 {
+		// not found, clean all logs in log buffer
+		rf.log = []LogEntry{}
+	} else {
+		// reserve logs after index, log of index not included
+		rf.log = append([]LogEntry{}, rf.log[index + 1:]...)
+	}
+	// update meta
+	rf.lastIndexOfSnapshot = lastIndex
+	rf.lastTermOfSnapshot = lastTerm
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
