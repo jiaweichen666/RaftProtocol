@@ -51,6 +51,7 @@ const (
 
 type LogEntry struct {
 	Command interface{}
+	Index   int
 	Term    int
 }
 
@@ -75,6 +76,21 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+type InstallSnapshotArgs struct {
+	Term     int
+	LeaderId int
+	// last log index included in snapshot
+	LastIndex int
+	// last log term included in snapshot
+	LastTerm int
+	// snapshot bytes
+	Snapshot []byte
+}
+
+type InstallSnapshotReply struct {
+	Term int
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -92,6 +108,7 @@ type Raft struct {
 	// Persistant state on all servers
 	currentTerm int
 	votedFor    int
+	// log Entries buffer of logs
 	log         []LogEntry
 	commitIndex int
 	lastApplied int
@@ -102,6 +119,10 @@ type Raft struct {
 	// keep the last time raft object accessed from the leader
 	// to avoid unnecessary voting
 	lastAccessed time.Time
+	// record the last log index of newest snapshot
+	lastIndexOfSnapshot int
+	// record the last log term of newest snapshot
+	lastTermOfSnapshot int
 }
 
 // return currentTerm and whether this server
