@@ -243,7 +243,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	newSnapLastLogTerm := rf.log[index-firstIndex-1].Term
 	rf.log = append([]LogEntry{}, rf.log[index-firstIndex:]...)
 	rf.lastIndexOfSnapshot = newSnapLastLogIndex
-	rf.lastTermOfSnapshotg = newSnapLastLogTerm
+	rf.lastTermOfSnapshot = newSnapLastLogTerm
 	rf.persist()
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -443,6 +443,44 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func (rf *Raft) InstallSnapshot(args InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	// save snapshot to local
+	// FIXME: read from persister of raft state first
+	// performance may suck
+	rf.persister.Save(rf.persister.ReadRaftState(), args.Snapshot)
+	// clean unneed log in log buffer
+	rf.TruncateLogs(args.LastIndex, args.LastTerm)
+	// update meta
+	rf.lastApplied = args.LastIndex
+	rf.commitIndex = args.LastIndex
+	rf.lastIndexOfSnapshot = args.LastIndex
+	rf.lastTermOfSnapshot = args.LastTerm
+	// update heartbeat
+	rf.lastAccessed = time.Now()
+	rf.persist()
+	// we need to update apply info
+	rf.applyMsg <- ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      args.Snapshot,
+		SnapshotTerm:  args.LastTerm,
+		SnapshotIndex: args.LastIndex,
+	}
+}
+
+// sendSnapshot RPC to a server
+func (rf *Raft) sendSnapshot(server int, args InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	return ok
 }
 
