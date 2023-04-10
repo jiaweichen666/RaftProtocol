@@ -15,7 +15,7 @@ package raft
 //   each time a new entry is committed to the log, each Raft peer
 //   should send an ApplyMsg to the service (or tester)
 //   in the same server.
-//
+// NOTICE: log index of raft begins from 1
 
 import (
 	"bytes"
@@ -41,6 +41,11 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// getLastIndex returns logs last index
+func (rf *Raft) getLastIndex() int {
+	return rf.log[len(rf.log)-1].Index
 }
 
 const (
@@ -192,8 +197,9 @@ func (rf *Raft) readPersist(data []byte) {
 	d.Decode(&rf.currentTerm)
 	d.Decode(&rf.votedFor)
 	d.Decode(&rf.log)
-	// TODO:need fix
-	rf.lastLogIndex = len(rf.log) - 1
+	if (len(rf.log)!= 0) {
+		rf.lastLogIndex = rf.log[len(rf.log) - 1].Index
+	}
 }
 
 // read snapshot from persistant storage
@@ -290,7 +296,7 @@ type AppendEntriesReply struct {
 	XLen    int
 }
 
-// example RequestVote RPC handler.
+// RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
@@ -315,8 +321,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// requester's log term is same as current server's
 	// but current server has more logs of current term
 	// reject requester's vote request
-	if rf.lastLogIndex-1 >= 0 {
-		lastLogTerm := rf.log[rf.lastLogIndex-1].Term
+	if rf.lastLogIndex- rf.lastIndexOfSnapshot - 1 >= 0 {
+		lastLogTerm := rf.log[rf.lastLogIndex- rf.lastIndexOfSnapshot - 1].Term
 		if lastLogTerm > args.LastLogTerm ||
 			(lastLogTerm == args.LastLogTerm && rf.lastLogIndex > args.LastLogIndex) {
 			reply.VoteGranted = false
@@ -377,17 +383,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	// not continous, return
-	if len(rf.log) < args.PrevLogIndex+1 {
+	if rf.lastLogIndex < args.PrevLogIndex+1 {
 		return
 	}
 
 	// current server's log conflict with leader's, find the first index of conflict term
-	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		reply.Xterm = rf.log[args.PrevLogIndex].Term
+	if rf.log[args.PrevLogIndex - rf.lastIndexOfSnapshot - 1].Term != args.PrevLogTerm {
+		reply.Xterm = rf.log[args.PrevLogIndex - rf.lastIndexOfSnapshot - 1].Term
 		for i, v := range rf.log {
 			if v.Term == reply.Xterm {
 				// find first log index of conflict term
-				reply.XIndex = i
+				reply.XIndex = rf.log[i].Index
 				break
 			}
 		}
@@ -399,18 +405,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for ; index < len(args.Entry); index++ {
 		// caculate current log index
 		currentIndex := args.PrevLogIndex + 1 + index
-		if currentIndex > len(rf.log)-1 {
+		if currentIndex > rf.lastLogIndex {
 			// find the continous place, append log from this index to
 			// current servers log batch
 			break
 		}
 
-		if rf.log[currentIndex].Term != args.Entry[index].Term {
+		if rf.log[currentIndex - rf.lastIndexOfSnapshot - 1].Term != args.Entry[index].Term {
 			// if current server's log conflict with leader's at currentIndex
 			// cut off log of range [currentIndex, end] in current server's
 			// log batch
-			rf.log = rf.log[:currentIndex]
-			rf.lastLogIndex = len(rf.log) - 1
+			rf.log = rf.log[:currentIndex - rf.lastIndexOfSnapshot - 1]
+			rf.lastLogIndex = rf.log[len(rf.log) - 1].Index
 			rf.persist()
 			break
 		}
@@ -421,7 +427,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// append logs from leader to current server's log batch tail
 	if len(args.Entry) > 0 {
 		rf.log = append(rf.log, args.Entry[index:]...)
-		rf.lastLogIndex = len(rf.log) - 1
+		rf.lastLogIndex = rf.log[len(rf.log) - 1].Index
 		rf.persist()
 	}
 
@@ -434,7 +440,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.commitIndex = i
 			rf.applyMsg <- ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[i].Command,
+				Command:      rf.log[i - rf.lastIndexOfSnapshot - 1].Command,
 				CommandIndex: i,
 			}
 		}
@@ -496,6 +502,7 @@ func (rf *Raft) sendSnapshot(server int, args InstallSnapshotArgs, reply *Instal
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
+// This is the propose function
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
@@ -508,11 +515,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return 0, 0, false
 	}
 	term = rf.currentTerm
+	index = rf.getLastIndex() + 1
 	rf.log = append(rf.log, LogEntry{
 		Command: command,
+		Index: index,
 		Term:    term,
 	})
-	rf.lastLogIndex = len(rf.log) - 1
+	rf.lastLogIndex = rf.getLastIndex()
 	index = rf.lastLogIndex
 	rf.persist()
 	return index, term, isLeader
@@ -578,15 +587,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.status = Follower
-	rf.log = []LogEntry{
-		{
-			Command: nil,
-			Term:    0,
-		},
-	}
+	rf.log = []LogEntry{}
 	rf.votedFor = -1
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	// log index begins from 1
+	rf.lastLogIndex = 0
+	rf.lastIndexOfSnapshot = 0
+	rf.lastTermOfSnapshot = 0
 	rf.applyMsg = applyCh
 
 	// initialize from state persisted before a crash
@@ -625,7 +633,7 @@ func (rf *Raft) manageCandidate() {
 	me := rf.me
 	term := rf.currentTerm
 	lastLogIndex := rf.lastLogIndex
-	lastLogTerm := rf.log[lastLogIndex].Term
+	lastLogTerm := rf.log[lastLogIndex - rf.lastIndexOfSnapshot - 1].Term
 	rf.mu.Unlock()
 	count := 0
 	total := len(peers)
@@ -713,7 +721,7 @@ func (rf *Raft) manageLeader() {
 		total := len(peers)
 		majority := (total / 2) + 1
 		for peer := range peers {
-			if matchIndex[peer] >= n && log[n].Term == term {
+			if matchIndex[peer] >= n && log[n - rf.lastIndexOfSnapshot - 1].Term == term {
 				count++
 			}
 		}
@@ -723,7 +731,7 @@ func (rf *Raft) manageLeader() {
 			for ; i <= n; i++ {
 				rf.applyMsg <- ApplyMsg{
 					CommandValid: true,
-					Command:      log[i].Command,
+					Command:      log[i - rf.lastIndexOfSnapshot - 1].Command,
 					CommandIndex: i,
 				}
 				rf.commitIndex = rf.commitIndex + 1
@@ -743,11 +751,11 @@ func (rf *Raft) manageLeader() {
 		args.Term = rf.currentTerm
 		prevLogIndex := nextIndex[peer] - 1
 		args.PrevLogIndex = prevLogIndex
-		args.PrevLogTerm = rf.log[prevLogIndex].Term
+		args.PrevLogTerm = rf.log[prevLogIndex - rf.lastIndexOfSnapshot - 1].Term
 		args.LeaderCommit = rf.commitIndex
 		args.LeaderId = rf.me
 		if nextIndex[peer] <= lastLogIndex {
-			args.Entry = rf.log[prevLogIndex+1 : lastLogIndex+1]
+			args.Entry = rf.log[prevLogIndex - rf.lastIndexOfSnapshot : lastLogIndex - rf.lastIndexOfSnapshot]
 		}
 		rf.mu.Unlock()
 
@@ -787,7 +795,7 @@ func (rf *Raft) manageLeader() {
 					// set peers next to XIndex to improve efficiency
 					rf.nextIndex[peer] = reply.XIndex
 				} else {
-					rf.nextIndex[peer] = index
+					rf.nextIndex[peer] = rf.log[index].Index
 				}
 			}
 			rf.mu.Unlock()
