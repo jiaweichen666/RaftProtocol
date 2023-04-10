@@ -189,16 +189,10 @@ func (rf *Raft) readPersist(data []byte) {
 	defer rf.mu.Unlock()
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	currentTerm, votedFor := 0, 0
-	if d.Decode(&currentTerm) != nil ||
-		d.Decode(&votedFor) != nil ||
-		d.Decode(&rf.log) != nil {
-
-	} else {
-		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
-		rf.lastLogIndex = len(rf.log) - 1
-	}
+	d.Decode(&rf.currentTerm)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.log)g
+	rf.lastLogIndex = len(rf.log) - 1
 }
 
 // the service says it has created a snapshot that has
