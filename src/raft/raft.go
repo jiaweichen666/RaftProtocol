@@ -232,8 +232,29 @@ func (rf *Raft) readSnapshot(data []byte) {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	firstIndex := rf.lastIndexOfSnapshot
+	lastIndex := rf.lastLogIndex
+	if index <= firstIndex || index > lastIndex {
+		return
+	}
+	newSnapLastLogIndex := rf.log[index-firstIndex-1].Index
+	newSnapLastLogTerm := rf.log[index-firstIndex-1].Term
+	rf.log = append([]LogEntry{}, rf.log[index-firstIndex:]...)
+	rf.lastIndexOfSnapshot = newSnapLastLogIndex
+	rf.lastTermOfSnapshotg = newSnapLastLogTerm
+	rf.persist()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(newSnapLastLogIndex)
+	e.Encode(newSnapLastLogTerm)
+	data := w.Bytes()
+	data = append(data, snapshot...)
+	// FIXME:Save interface need to pass raft state as first argument
+	// for convinience, we read from persister and pass to function
+	// performance may suck
+	rf.persister.Save(rf.persister.ReadRaftState(), data)
 }
 
 // example RequestVote RPC arguments structure.
