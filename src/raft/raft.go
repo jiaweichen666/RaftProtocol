@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	//"fmt"
+	"fmt"
 
 	"6.5840/labgob"
 	"6.5840/labrpc"
@@ -157,7 +157,9 @@ func (rf *Raft) persist() {
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
 	data := w.Bytes()
-	rf.persister.Save(data, nil)
+	// FIXME:read snapshot first if exists
+	// performance may suck
+	rf.persister.Save(data, rf.persister.ReadSnapshot())
 }
 
 // restore previously persisted state.
@@ -212,6 +214,7 @@ func (rf *Raft) readSnapshot(data []byte) {
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	fmt.Printf("Snapshot called on server:%v\n", rf.me)
 	firstIndex := rf.lastIndexOfSnapshot
 	lastIndex := rf.getLastIndex()
 	if index <= firstIndex || index > lastIndex {
@@ -359,17 +362,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	// request from older leader, reject
 	if args.Term < rf.currentTerm {
-		// fmt.Printf("leader's term: %v smaller than me:%v, reject\n", args.Term, rf.currentTerm)
+		fmt.Printf("leader's term: %v smaller than me:%v, reject\n", args.Term, rf.currentTerm)
 		return
 	}
 	// receive heartbeat from leader, update access time to prevent vote
+	fmt.Printf("server %v receive heartbeat rpc and renew last accessed\n", rf.me)
 	rf.lastAccessed = time.Now()
 	// not continous, return
 	// we expect prevlogIndex <= rf.lastIndex
 	// if prevlogIndex == lastIndex, log is continous
 	// if prevlogIndex < lastIndex, logs in args maybe can be partially used
 	if rf.getLastIndex() < args.PrevLogIndex {
-		// fmt.Printf("Prev log index:%v not continous with mine lastIndex:%v, reject\n", args.PrevLogIndex, rf.getLastIndex())
+		fmt.Printf("Prev log index:%v not continous with mine lastIndex:%v, reject\n", args.PrevLogIndex, rf.getLastIndex())
 		return
 	}
 	/*
@@ -384,9 +388,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	* since failures happen infrequently and it is unlikely that there will be many inconsistent en- tries.
 	 */
 	// current server's log conflict with leader's, find the first index of conflict term
-	if rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term != args.PrevLogTerm {
+	prevLogTerm := 0
+	if args.PrevLogIndex == rf.lastIndexOfSnapshot {
+		// prelogIndex maybe in snapshot
+		prevLogTerm = rf.lastTermOfSnapshot
+	} else {
+		prevLogTerm = rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term
+	}
+	if prevLogTerm != args.PrevLogTerm {
 		// set Xterm as conflict term
-		reply.Xterm = rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term
+		reply.Xterm = prevLogTerm
 		for i, v := range rf.log {
 			if v.Term == reply.Xterm {
 				// find first log index of conflict term
@@ -417,7 +428,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 	}
-
 	reply.Success = true
 	// append logs from leader to current server's log batch tail
 	if len(args.Entry) > 0 {
@@ -447,15 +457,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 // rpc handler for installing snapshot
-func (rf *Raft) InstallSnapshot(args InstallSnapshotArgs, reply *InstallSnapshotReply) {
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
+		fmt.Printf("Server:%v received install snapshot rpc with term:%v but smaller than currentTerm:%v\n", rf.me, args.Term, rf.currentTerm)
 		return
 	}
 
+	fmt.Printf("server %v receive install snapshot rpc\n", rf.me)
 	// save snapshot to local
 	// FIXME: read from persister of raft state first
 	// performance may suck
@@ -468,6 +480,7 @@ func (rf *Raft) InstallSnapshot(args InstallSnapshotArgs, reply *InstallSnapshot
 	rf.lastIndexOfSnapshot = args.LastIndex
 	rf.lastTermOfSnapshot = args.LastTerm
 	// update heartbeat
+	fmt.Printf("server %v receive install snapshot rpc and renew last accessed\n", rf.me)
 	rf.lastAccessed = time.Now()
 	rf.persist()
 	// we need to update apply info
@@ -480,7 +493,7 @@ func (rf *Raft) InstallSnapshot(args InstallSnapshotArgs, reply *InstallSnapshot
 }
 
 // sendSnapshot RPC to a server
-func (rf *Raft) sendSnapshot(server int, args InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+func (rf *Raft) sendSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
 	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	return ok
 }
@@ -619,7 +632,7 @@ func (rf *Raft) manageFollower() {
 	rf.mu.Unlock()
 	if time.Since(lastAccessed).Milliseconds() >= duration.Milliseconds() {
 		// heartbeat timeout, start voting
-		// fmt.Printf("server %v heartbeat timeout, start voting...\n", rf.me)
+		fmt.Printf("server %v heartbeat timeout, start voting...\n", rf.me)
 		rf.mu.Lock()
 		rf.status = Candidate
 		rf.currentTerm++
@@ -637,7 +650,11 @@ func (rf *Raft) manageCandidate() {
 	me := rf.me
 	term := rf.currentTerm
 	lastLogTerm := 0
-	lastLogTerm = rf.log[rf.getLastIndex()-rf.lastIndexOfSnapshot-1].Term
+	if rf.getLastIndex() == rf.lastIndexOfSnapshot {
+		lastLogTerm = rf.lastTermOfSnapshot
+	} else {
+		lastLogTerm = rf.log[rf.getLastIndex()-rf.lastIndexOfSnapshot-1].Term
+	}
 	rf.mu.Unlock()
 	count := 0
 	total := len(peers)
@@ -694,7 +711,7 @@ func (rf *Raft) manageCandidate() {
 	}
 	if rf.status == Candidate && count >= majority {
 		rf.status = Leader
-		// fmt.Printf("server %v become leader of term %v\n", rf.me, rf.currentTerm)
+		fmt.Printf("server %v become leader of term %v\n", rf.me, rf.currentTerm)
 		for peer := range peers {
 			rf.nextIndex[peer] = rf.getLastIndex() + 1
 		}
@@ -757,7 +774,12 @@ func (rf *Raft) manageLeader() {
 			args.Term = rf.currentTerm
 			prevLogIndex := nextIndex[peer] - 1
 			args.PrevLogIndex = prevLogIndex
-			args.PrevLogTerm = rf.log[prevLogIndex-rf.lastIndexOfSnapshot-1].Term
+			fmt.Printf("server:%v to peer:%v PrevlogIndex:%v and lastIndexOfSnapshot:%v\n", rf.me, peer, prevLogIndex, rf.lastIndexOfSnapshot)
+			if prevLogIndex == rf.lastIndexOfSnapshot {
+				args.PrevLogTerm = rf.lastTermOfSnapshot
+			} else {
+				args.PrevLogTerm = rf.log[prevLogIndex-rf.lastIndexOfSnapshot-1].Term
+			}
 			args.LeaderCommit = rf.commitIndex
 			args.LeaderId = rf.me
 			if nextIndex[peer] <= lastLogIndex {
@@ -769,26 +791,29 @@ func (rf *Raft) manageLeader() {
 			go func(peer int) {
 				ok := rf.sendAppendEntries(peer, &args, &reply)
 				if !ok {
+					fmt.Printf("server %v ape to peer:%v with no reply\n", rf.me, peer)
 					return
 				}
 
 				rf.mu.Lock()
+				defer rf.mu.Unlock()
 				if reply.Success {
 					rf.nextIndex[peer] = min(rf.nextIndex[peer]+len(args.Entry), rf.getLastIndex()+1)
 					rf.matchIndex[peer] = prevLogIndex + len(args.Entry)
+					fmt.Printf("server %v to peer:%v success, update nextIndex:%v, matchIndex:%v\n", rf.me, peer, rf.nextIndex[peer], rf.matchIndex[peer])
 				} else {
+					fmt.Printf("server %v ape to peer:%v failed\n", rf.me, peer)
 					// Case 1: leader doesn't have XTerm: nextIndex = XIndex
 					// Case 2: leader has XTerm: nextIndex = leader's last entry for XTerm
 					// Case 3: follower's log is too short: nextIndex = XLen
 					if reply.Term > args.Term {
+						fmt.Printf("server %v of term:%v receive higher term:%v, transfer to follower\n", rf.me, rf.currentTerm, reply.Term)
 						rf.status = Follower
-						rf.mu.Unlock()
 						return
 					}
 					// no conflict term
 					if reply.Xterm == -1 {
 						rf.nextIndex[peer] = reply.XLen
-						rf.mu.Unlock()
 						return
 					}
 					index := -1
@@ -807,7 +832,6 @@ func (rf *Raft) manageLeader() {
 						rf.nextIndex[peer] = rf.log[index].Index
 					}
 				}
-				rf.mu.Unlock()
 			}(peer)
 		} else {
 			// peer needed log index not in log buffer
@@ -820,7 +844,7 @@ func (rf *Raft) manageLeader() {
 			args.Term = rf.currentTerm
 			args.Snapshot = rf.persister.ReadSnapshot()
 			go func(peer int) {
-				ok := rf.sendSnapshot(peer, args, &reply)
+				ok := rf.sendSnapshot(peer, &args, &reply)
 				if !ok {
 					return
 				}
