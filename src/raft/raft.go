@@ -33,7 +33,11 @@ func min(a, b int) int {
 
 // getLastIndex returns logs last index
 func (rf *Raft) getLastIndex() int {
-	return rf.log[len(rf.log)-1].Index
+	if len(rf.log) == 0 {
+		return rf.lastIndexOfSnapshot
+	} else {
+		return rf.log[len(rf.log)-1].Index
+	}
 }
 
 // server status, one raft group only contains one leader
@@ -596,6 +600,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.readSnapshot(persister.ReadSnapshot())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
@@ -744,64 +749,93 @@ func (rf *Raft) manageLeader() {
 		if peer == me {
 			continue
 		}
-
-		args := AppendEntriesArgs{}
-		reply := AppendEntriesReply{}
-		rf.mu.Lock()
-		args.Term = rf.currentTerm
-		prevLogIndex := nextIndex[peer] - 1
-		args.PrevLogIndex = prevLogIndex
-		args.PrevLogTerm = rf.log[prevLogIndex-rf.lastIndexOfSnapshot-1].Term
-		args.LeaderCommit = rf.commitIndex
-		args.LeaderId = rf.me
-		if nextIndex[peer] <= lastLogIndex {
-			args.Entry = rf.log[prevLogIndex-rf.lastIndexOfSnapshot : lastLogIndex-rf.lastIndexOfSnapshot]
-		}
-		rf.mu.Unlock()
-
-		// execute appending entries
-		go func(peer int) {
-			ok := rf.sendAppendEntries(peer, &args, &reply)
-			if !ok {
-				return
-			}
-
+		// FIXME:when lastIndexOfSnapshot is -1, maybe out of range
+		if rf.nextIndex[peer] > rf.lastIndexOfSnapshot {
+			args := AppendEntriesArgs{}
+			reply := AppendEntriesReply{}
 			rf.mu.Lock()
-			if reply.Success {
-				rf.nextIndex[peer] = min(rf.nextIndex[peer]+len(args.Entry), rf.getLastIndex()+1)
-				rf.matchIndex[peer] = prevLogIndex + len(args.Entry)
-			} else {
-				// Case 1: leader doesn't have XTerm: nextIndex = XIndex
-				// Case 2: leader has XTerm: nextIndex = leader's last entry for XTerm
-				// Case 3: follower's log is too short: nextIndex = XLen
-				if reply.Term > args.Term {
-					rf.status = Follower
-					rf.mu.Unlock()
-					return
-				}
-				// no conflict term
-				if reply.Xterm == -1 {
-					rf.nextIndex[peer] = reply.XLen
-					rf.mu.Unlock()
-					return
-				}
-				index := -1
-				// if leader has the conflict term, set peers next
-				// to the last log index of this term
-				for i, v := range rf.log {
-					if v.Term == reply.Xterm {
-						index = i
-					}
-				}
-				if index == -1 {
-					// if leader cannot find log of Xterm
-					// set peers next to XIndex to improve efficiency
-					rf.nextIndex[peer] = reply.XIndex
-				} else {
-					rf.nextIndex[peer] = rf.log[index].Index
-				}
+			args.Term = rf.currentTerm
+			prevLogIndex := nextIndex[peer] - 1
+			args.PrevLogIndex = prevLogIndex
+			args.PrevLogTerm = rf.log[prevLogIndex-rf.lastIndexOfSnapshot-1].Term
+			args.LeaderCommit = rf.commitIndex
+			args.LeaderId = rf.me
+			if nextIndex[peer] <= lastLogIndex {
+				args.Entry = rf.log[prevLogIndex-rf.lastIndexOfSnapshot : lastLogIndex-rf.lastIndexOfSnapshot]
 			}
 			rf.mu.Unlock()
-		}(peer)
+
+			// execute appending entries
+			go func(peer int) {
+				ok := rf.sendAppendEntries(peer, &args, &reply)
+				if !ok {
+					return
+				}
+
+				rf.mu.Lock()
+				if reply.Success {
+					rf.nextIndex[peer] = min(rf.nextIndex[peer]+len(args.Entry), rf.getLastIndex()+1)
+					rf.matchIndex[peer] = prevLogIndex + len(args.Entry)
+				} else {
+					// Case 1: leader doesn't have XTerm: nextIndex = XIndex
+					// Case 2: leader has XTerm: nextIndex = leader's last entry for XTerm
+					// Case 3: follower's log is too short: nextIndex = XLen
+					if reply.Term > args.Term {
+						rf.status = Follower
+						rf.mu.Unlock()
+						return
+					}
+					// no conflict term
+					if reply.Xterm == -1 {
+						rf.nextIndex[peer] = reply.XLen
+						rf.mu.Unlock()
+						return
+					}
+					index := -1
+					// if leader has the conflict term, set peers next
+					// to the last log index of this term
+					for i, v := range rf.log {
+						if v.Term == reply.Xterm {
+							index = i
+						}
+					}
+					if index == -1 {
+						// if leader cannot find log of Xterm
+						// set peers next to XIndex to improve efficiency
+						rf.nextIndex[peer] = reply.XIndex
+					} else {
+						rf.nextIndex[peer] = rf.log[index].Index
+					}
+				}
+				rf.mu.Unlock()
+			}(peer)
+		} else {
+			// peer needed log index not in log buffer
+			// leader has to send snapshot to this slave
+			args := InstallSnapshotArgs{}
+			reply := InstallSnapshotReply{}
+			args.LastIndex = rf.lastIndexOfSnapshot
+			args.LastTerm = rf.lastTermOfSnapshot
+			args.LeaderId = rf.me
+			args.Term = rf.currentTerm
+			args.Snapshot = rf.persister.ReadSnapshot()
+			go func(peer int) {
+				ok := rf.sendSnapshot(peer, args, &reply)
+				if !ok {
+					return
+				}
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if reply.Term > rf.currentTerm {
+					rf.currentTerm = reply.Term
+					rf.status = Follower
+					rf.votedFor = -1
+					rf.persist()
+					return
+				}
+				rf.nextIndex[peer] = args.LastIndex + 1
+				rf.matchIndex[peer] = args.LastIndex
+			}(peer)
+		}
 	}
 }
