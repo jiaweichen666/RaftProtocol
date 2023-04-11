@@ -187,7 +187,7 @@ func (rf *Raft) persist() {
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) < 1 {
 		return
 	}
 	rf.mu.Lock()
@@ -247,7 +247,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	}
 	newSnapLastLogIndex := rf.log[index-firstIndex-1].Index
 	newSnapLastLogTerm := rf.log[index-firstIndex-1].Term
+	// truncate the log from log buffer to index, log of index is included
 	rf.log = append([]LogEntry{}, rf.log[index-firstIndex:]...)
+	// update meta
 	rf.lastIndexOfSnapshot = newSnapLastLogIndex
 	rf.lastTermOfSnapshot = newSnapLastLogTerm
 	rf.persist()
@@ -587,13 +589,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.status = Follower
-	rf.log = []LogEntry{}
+	rf.log = append(rf.log, LogEntry{
+		Index: 0,
+		Term:  0,
+	})
 	rf.votedFor = -1
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	// log index begins from 1
 	rf.lastLogIndex = 0
-	rf.lastIndexOfSnapshot = 0
+	// maybe a little hack
+	rf.lastIndexOfSnapshot = -1
 	rf.lastTermOfSnapshot = 0
 	rf.applyMsg = applyCh
 
@@ -633,7 +639,8 @@ func (rf *Raft) manageCandidate() {
 	me := rf.me
 	term := rf.currentTerm
 	lastLogIndex := rf.lastLogIndex
-	lastLogTerm := rf.log[lastLogIndex-rf.lastIndexOfSnapshot-1].Term
+	lastLogTerm := 0
+	lastLogTerm = rf.log[lastLogIndex-rf.lastIndexOfSnapshot-1].Term
 	rf.mu.Unlock()
 	count := 0
 	total := len(peers)
