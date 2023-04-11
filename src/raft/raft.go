@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	//"fmt"
+
 	"6.5840/labgob"
 	"6.5840/labrpc"
 )
@@ -376,11 +378,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	// request from older leader, reject
 	if args.Term < rf.currentTerm {
+		// fmt.Printf("leader's term: %v smaller than me:%v, reject\n", args.Term, rf.currentTerm)
 		return
 	}
-
+	// receive heartbeat from leader, update access time to prevent vote
+	rf.lastAccessed = time.Now()
 	// not continous, return
-	if rf.getLastIndex() < args.PrevLogIndex+1 {
+	// we expect prevlogIndex <= rf.lastIndex
+	// if prevlogIndex == lastIndex, log is continous
+	// if prevlogIndex < lastIndex, logs in args maybe can be partially used
+	if rf.getLastIndex() < args.PrevLogIndex {
+		// fmt.Printf("Prev log index:%v not continous with mine lastIndex:%v, reject\n", args.PrevLogIndex, rf.getLastIndex())
 		return
 	}
 
@@ -419,7 +427,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Success = true
-	rf.lastAccessed = time.Now()
 	// append logs from leader to current server's log batch tail
 	if len(args.Entry) > 0 {
 		rf.log = append(rf.log, args.Entry[index:]...)
@@ -516,7 +523,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Index:   index,
 		Term:    term,
 	})
-	index = rf.getLastIndex()
 	rf.persist()
 	return index, term, isLeader
 }
@@ -578,19 +584,24 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
-	// Your initialization code here (2A, 2B, 2C).
+	// serve starts as Follower
 	rf.status = Follower
+	// initiate log with a dummy logentry
+	rf.votedFor = -1
+	// acording to raft paper, current term starts with 0
+	rf.currentTerm = 0
+	// acording to raft paper, commitIndex and lastApplied initialized with 0
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	rf.log = append(rf.log, LogEntry{
 		Index: 0,
 		Term:  0,
 	})
-	rf.votedFor = -1
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	// maybe a little hack
 	rf.lastIndexOfSnapshot = -1
-	rf.lastTermOfSnapshot = 0
+	rf.lastTermOfSnapshot = -1
 	rf.applyMsg = applyCh
 
 	// initialize from state persisted before a crash
@@ -612,6 +623,8 @@ func (rf *Raft) manageFollower() {
 	lastAccessed := rf.lastAccessed
 	rf.mu.Unlock()
 	if time.Since(lastAccessed).Milliseconds() >= duration.Milliseconds() {
+		// heartbeat timeout, start voting
+		// fmt.Printf("server %v heartbeat timeout, start voting...\n", rf.me)
 		rf.mu.Lock()
 		rf.status = Candidate
 		rf.currentTerm++
@@ -686,6 +699,7 @@ func (rf *Raft) manageCandidate() {
 	}
 	if rf.status == Candidate && count >= majority {
 		rf.status = Leader
+		// fmt.Printf("server %v become leader of term %v\n", rf.me, rf.currentTerm)
 		for peer := range peers {
 			rf.nextIndex[peer] = rf.getLastIndex() + 1
 		}
