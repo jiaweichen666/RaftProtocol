@@ -197,8 +197,8 @@ func (rf *Raft) readPersist(data []byte) {
 	d.Decode(&rf.currentTerm)
 	d.Decode(&rf.votedFor)
 	d.Decode(&rf.log)
-	if (len(rf.log)!= 0) {
-		rf.lastLogIndex = rf.log[len(rf.log) - 1].Index
+	if len(rf.log) != 0 {
+		rf.lastLogIndex = rf.log[len(rf.log)-1].Index
 	}
 }
 
@@ -321,8 +321,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// requester's log term is same as current server's
 	// but current server has more logs of current term
 	// reject requester's vote request
-	if rf.lastLogIndex- rf.lastIndexOfSnapshot - 1 >= 0 {
-		lastLogTerm := rf.log[rf.lastLogIndex- rf.lastIndexOfSnapshot - 1].Term
+	if rf.lastLogIndex-rf.lastIndexOfSnapshot-1 >= 0 {
+		lastLogTerm := rf.log[rf.lastLogIndex-rf.lastIndexOfSnapshot-1].Term
 		if lastLogTerm > args.LastLogTerm ||
 			(lastLogTerm == args.LastLogTerm && rf.lastLogIndex > args.LastLogIndex) {
 			reply.VoteGranted = false
@@ -388,8 +388,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	// current server's log conflict with leader's, find the first index of conflict term
-	if rf.log[args.PrevLogIndex - rf.lastIndexOfSnapshot - 1].Term != args.PrevLogTerm {
-		reply.Xterm = rf.log[args.PrevLogIndex - rf.lastIndexOfSnapshot - 1].Term
+	if rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term != args.PrevLogTerm {
+		reply.Xterm = rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term
 		for i, v := range rf.log {
 			if v.Term == reply.Xterm {
 				// find first log index of conflict term
@@ -411,12 +411,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 
-		if rf.log[currentIndex - rf.lastIndexOfSnapshot - 1].Term != args.Entry[index].Term {
+		if rf.log[currentIndex-rf.lastIndexOfSnapshot-1].Term != args.Entry[index].Term {
 			// if current server's log conflict with leader's at currentIndex
 			// cut off log of range [currentIndex, end] in current server's
 			// log batch
-			rf.log = rf.log[:currentIndex - rf.lastIndexOfSnapshot - 1]
-			rf.lastLogIndex = rf.log[len(rf.log) - 1].Index
+			rf.log = rf.log[:currentIndex-rf.lastIndexOfSnapshot-1]
+			rf.lastLogIndex = rf.log[len(rf.log)-1].Index
 			rf.persist()
 			break
 		}
@@ -427,7 +427,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// append logs from leader to current server's log batch tail
 	if len(args.Entry) > 0 {
 		rf.log = append(rf.log, args.Entry[index:]...)
-		rf.lastLogIndex = rf.log[len(rf.log) - 1].Index
+		rf.lastLogIndex = rf.log[len(rf.log)-1].Index
 		rf.persist()
 	}
 
@@ -440,7 +440,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.commitIndex = i
 			rf.applyMsg <- ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[i - rf.lastIndexOfSnapshot - 1].Command,
+				Command:      rf.log[i-rf.lastIndexOfSnapshot-1].Command,
 				CommandIndex: i,
 			}
 		}
@@ -518,7 +518,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.getLastIndex() + 1
 	rf.log = append(rf.log, LogEntry{
 		Command: command,
-		Index: index,
+		Index:   index,
 		Term:    term,
 	})
 	rf.lastLogIndex = rf.getLastIndex()
@@ -633,7 +633,7 @@ func (rf *Raft) manageCandidate() {
 	me := rf.me
 	term := rf.currentTerm
 	lastLogIndex := rf.lastLogIndex
-	lastLogTerm := rf.log[lastLogIndex - rf.lastIndexOfSnapshot - 1].Term
+	lastLogTerm := rf.log[lastLogIndex-rf.lastIndexOfSnapshot-1].Term
 	rf.mu.Unlock()
 	count := 0
 	total := len(peers)
@@ -721,7 +721,7 @@ func (rf *Raft) manageLeader() {
 		total := len(peers)
 		majority := (total / 2) + 1
 		for peer := range peers {
-			if matchIndex[peer] >= n && log[n - rf.lastIndexOfSnapshot - 1].Term == term {
+			if matchIndex[peer] >= n && log[n-rf.lastIndexOfSnapshot-1].Term == term {
 				count++
 			}
 		}
@@ -731,7 +731,7 @@ func (rf *Raft) manageLeader() {
 			for ; i <= n; i++ {
 				rf.applyMsg <- ApplyMsg{
 					CommandValid: true,
-					Command:      log[i - rf.lastIndexOfSnapshot - 1].Command,
+					Command:      log[i-rf.lastIndexOfSnapshot-1].Command,
 					CommandIndex: i,
 				}
 				rf.commitIndex = rf.commitIndex + 1
@@ -751,11 +751,11 @@ func (rf *Raft) manageLeader() {
 		args.Term = rf.currentTerm
 		prevLogIndex := nextIndex[peer] - 1
 		args.PrevLogIndex = prevLogIndex
-		args.PrevLogTerm = rf.log[prevLogIndex - rf.lastIndexOfSnapshot - 1].Term
+		args.PrevLogTerm = rf.log[prevLogIndex-rf.lastIndexOfSnapshot-1].Term
 		args.LeaderCommit = rf.commitIndex
 		args.LeaderId = rf.me
 		if nextIndex[peer] <= lastLogIndex {
-			args.Entry = rf.log[prevLogIndex - rf.lastIndexOfSnapshot : lastLogIndex - rf.lastIndexOfSnapshot]
+			args.Entry = rf.log[prevLogIndex-rf.lastIndexOfSnapshot : lastLogIndex-rf.lastIndexOfSnapshot]
 		}
 		rf.mu.Unlock()
 
