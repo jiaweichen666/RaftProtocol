@@ -1,20 +1,5 @@
 package raft
 
-//
-// this is an outline of the API that raft must expose to
-// the service (or tester). see comments below for
-// each of these functions for more details.
-//
-// rf = Make(...)
-//   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
-//   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
-// ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
-//   should send an ApplyMsg to the service (or tester)
-//   in the same server.
 // NOTICE: log index of raft begins from 1
 
 import (
@@ -30,6 +15,7 @@ import (
 	"6.5840/labrpc"
 )
 
+// election timeout of every serve ranges from 500 to 1000 millionseconds
 const MinElectionTimeout = 500
 const MaxElectionTimeout = 1000
 
@@ -50,12 +36,14 @@ func (rf *Raft) getLastIndex() int {
 	return rf.log[len(rf.log)-1].Index
 }
 
+// server status, one raft group only contains one leader
 const (
 	Follower = iota
 	Candidate
 	Leader
 )
 
+// structure for raft log
 type LogEntry struct {
 	Command interface{}
 	Index   int
@@ -67,16 +55,10 @@ type LogEntry struct {
 // tester) on the same server, via the applyCh passed to Make(). set
 // CommandValid to true to indicate that the ApplyMsg contains a newly
 // committed log entry.
-//
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
 type ApplyMsg struct {
-	CommandValid bool
-	Command      interface{}
-	CommandIndex int
-
-	// For 2D:
+	CommandValid  bool
+	Command       interface{}
+	CommandIndex  int
 	SnapshotValid bool
 	Snapshot      []byte
 	SnapshotTerm  int
@@ -100,41 +82,32 @@ type InstallSnapshotReply struct {
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
-	status   int
-	applyMsg chan ApplyMsg
-	// Persistant state on all servers
-	currentTerm int
-	votedFor    int
-	// log Entries buffer of logs
-	log         []LogEntry
-	commitIndex int
-	lastApplied int
-	nextIndex   []int
-	matchIndex  []int
-	// keep the last time raft object accessed from the leader
-	// to avoid unnecessary voting
-	lastAccessed time.Time
-	// record the last log index of newest snapshot
-	lastIndexOfSnapshot int
-	// record the last log term of newest snapshot
-	lastTermOfSnapshot int
+	mu                  sync.Mutex          // Lock to protect shared access to this peer's state
+	peers               []*labrpc.ClientEnd // RPC end points of all peers
+	persister           *Persister          // Object to hold this peer's persisted state
+	me                  int                 // this peer's index into peers[]
+	dead                int32               // set by Kill()
+	status              int                 // serve status of raft group
+	applyMsg            chan ApplyMsg       // applied log channel
+	currentTerm         int                 // term of current server, need persist
+	votedFor            int                 // leader id of current server, need persist
+	log                 []LogEntry          // log Entries buffer of logs,need persist
+	commitIndex         int                 // volatile states of last committed log index
+	lastApplied         int                 // volatile states of last applied log index
+	nextIndex           []int               // next index tracker for all slaves
+	matchIndex          []int               // matched index tracker for all slaves
+	lastAccessed        time.Time           // last time raft object accessed from the leader
+	lastIndexOfSnapshot int                 // last log index of newest snapshot, persist when snapshotting
+	lastTermOfSnapshot  int                 // last log term of newest snapshot, persist when snapshotting
 }
 
 // truncate logs from begin to lastIndex
 // lastIndex log is included
 // all these logs are included in snapshot
+// used for slave when leader handling snapshot sent by leader
 func (rf *Raft) TruncateLogs(lastIndex int, lastTerm int) {
 	index := -1
+	// find target log index in log buffer
 	for i := len(rf.log) - 1; i >= 0; i-- {
 		if rf.log[i].Index == rf.lastIndexOfSnapshot && rf.log[i].Term == rf.lastTermOfSnapshot {
 			index = i
@@ -148,7 +121,7 @@ func (rf *Raft) TruncateLogs(lastIndex int, lastTerm int) {
 		// reserve logs after index, log of index not included
 		rf.log = append([]LogEntry{}, rf.log[index+1:]...)
 	}
-	// update meta
+	// TODO: update meta, is this necessary?
 	rf.lastIndexOfSnapshot = lastIndex
 	rf.lastTermOfSnapshot = lastTerm
 }
@@ -159,7 +132,6 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	var isleader bool
-	// Your code here (2A).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	isleader = rf.status == Leader
@@ -175,7 +147,6 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (2C).
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -202,7 +173,7 @@ func (rf *Raft) readPersist(data []byte) {
 // read snapshot from persistant storage
 // lastIndex and lastTerm are included in snapshot buffer
 func (rf *Raft) readSnapshot(data []byte) {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return
 	}
 	r := bytes.NewBuffer(data)
@@ -242,6 +213,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	if index <= firstIndex || index > lastIndex {
 		return
 	}
+	// get index and term of target 'Index' in log buffer
 	newSnapLastLogIndex := rf.log[index-firstIndex-1].Index
 	newSnapLastLogTerm := rf.log[index-firstIndex-1].Term
 	// truncate the log from log buffer to index, log of index is included
@@ -297,7 +269,6 @@ type AppendEntriesReply struct {
 
 // RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// already voted for candidate, return directly
@@ -316,8 +287,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm, rf.votedFor = args.Term, -1
 		rf.status = Follower
 	}
+	// current term <= request's term
 	reply.Term = args.Term
-	// requester's log term is same as current server's
+	// requester's term is same as current server's
 	// but current server has more logs of current term
 	// reject requester's vote request
 	if rf.getLastIndex()-rf.lastIndexOfSnapshot-1 >= 0 {
@@ -328,6 +300,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			return
 		}
 	}
+	// requester's log is newer, vote for requester
 	rf.status = Follower
 	rf.lastAccessed = time.Now()
 	reply.VoteGranted = true
@@ -367,6 +340,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// appendEntries rpc handler
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -394,6 +368,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// current server's log conflict with leader's, find the first index of conflict term
 	if rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term != args.PrevLogTerm {
+		// set Xterm as conflict term
 		reply.Xterm = rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term
 		for i, v := range rf.log {
 			if v.Term == reply.Xterm {
@@ -454,6 +429,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
+// rpc handler for installing snapshot
 func (rf *Raft) InstallSnapshot(args InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -517,7 +493,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return 0, 0, false
 	}
 	term = rf.currentTerm
+	// monotonically increasing index
 	index = rf.getLastIndex() + 1
+	// propose a new log entry
 	rf.log = append(rf.log, LogEntry{
 		Command: command,
 		Index:   index,
@@ -538,7 +516,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 }
 
 func (rf *Raft) killed() bool {
@@ -548,8 +525,6 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) ticker() {
 	for !rf.killed() {
-
-		// Your code here (2A)
 		// Check if a leader election should be started.
 		rf.mu.Lock()
 		status := rf.status
@@ -584,15 +559,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	// serve starts as Follower
+	// server starts as Follower
 	rf.status = Follower
-	// initiate log with a dummy logentry
 	rf.votedFor = -1
 	// acording to raft paper, current term starts with 0
 	rf.currentTerm = 0
 	// acording to raft paper, commitIndex and lastApplied initialized with 0
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+	// initiate log with a dummy logentry
 	rf.log = append(rf.log, LogEntry{
 		Index: 0,
 		Term:  0,
@@ -600,6 +575,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	// maybe a little hack
+	// lastIndexOfSnapshot initial value need to be -1
+	// to prevent index out of log buffer range
 	rf.lastIndexOfSnapshot = -1
 	rf.lastTermOfSnapshot = -1
 	rf.applyMsg = applyCh
@@ -786,7 +763,7 @@ func (rf *Raft) manageLeader() {
 					rf.mu.Unlock()
 					return
 				}
-
+				// no conflict term
 				if reply.Xterm == -1 {
 					rf.nextIndex[peer] = reply.XLen
 					rf.mu.Unlock()
