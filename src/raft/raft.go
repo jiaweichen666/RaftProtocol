@@ -344,10 +344,13 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
+	// XTerm:  term in the conflicting entry (if any)
+	// XIndex: index of first entry with that term (if any)
+	// XLen:   log length
 	reply.Xterm = -1
 	reply.XIndex = -1
-	reply.XLen = len(rf.log)
+	//FIXME: reply.Xlen = len(rf.log)
+	reply.XLen = rf.getLastIndex() + 1
 	reply.Success = false
 	reply.Term = rf.currentTerm
 	// request from older leader, reject
@@ -365,7 +368,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// fmt.Printf("Prev log index:%v not continous with mine lastIndex:%v, reject\n", args.PrevLogIndex, rf.getLastIndex())
 		return
 	}
-
+	/*
+	* According to raft thesis, confilct log replication can be handled more quickly by machnism below:
+	* If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+	* For example, when rejecting an AppendEntries request,
+	* the follower can include the term of the conflicting entry and the first index it stores for that term.
+	* With this information, the leader can decrement nextIndex to bypass all of the con- flicting entries in that term;
+	* one AppendEntries RPC will be required for each term with conflicting entries,
+	* rather than one RPC per entry.
+	* In practice, we doubt this opti- mization is necessary,
+	* since failures happen infrequently and it is unlikely that there will be many inconsistent en- tries.
+	 */
 	// current server's log conflict with leader's, find the first index of conflict term
 	if rf.log[args.PrevLogIndex-rf.lastIndexOfSnapshot-1].Term != args.PrevLogTerm {
 		// set Xterm as conflict term
@@ -758,6 +771,9 @@ func (rf *Raft) manageLeader() {
 				rf.nextIndex[peer] = min(rf.nextIndex[peer]+len(args.Entry), rf.getLastIndex()+1)
 				rf.matchIndex[peer] = prevLogIndex + len(args.Entry)
 			} else {
+				// Case 1: leader doesn't have XTerm: nextIndex = XIndex
+				// Case 2: leader has XTerm: nextIndex = leader's last entry for XTerm
+				// Case 3: follower's log is too short: nextIndex = XLen
 				if reply.Term > args.Term {
 					rf.status = Follower
 					rf.mu.Unlock()
