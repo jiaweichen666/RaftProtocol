@@ -541,7 +541,7 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
@@ -611,7 +611,7 @@ func (rf *Raft) manageFollower() {
 	rf.mu.Lock()
 	lastAccessed := rf.lastAccessed
 	rf.mu.Unlock()
-	if time.Now().Sub(lastAccessed).Milliseconds() >= duration.Milliseconds() {
+	if time.Since(lastAccessed).Milliseconds() >= duration.Milliseconds() {
 		rf.mu.Lock()
 		rf.status = Candidate
 		rf.currentTerm++
@@ -672,14 +672,14 @@ func (rf *Raft) manageCandidate() {
 	}
 	for {
 		rf.mu.Lock()
-		if count >= majority || finished == total || time.Now().Sub(start).Milliseconds() >= timeOut.Milliseconds() {
+		if count >= majority || finished == total || time.Since(start).Milliseconds() >= timeOut.Milliseconds() {
 			break
 		}
 		rf.mu.Unlock()
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	if time.Now().Sub(start).Milliseconds() >= timeOut.Milliseconds() {
+	if time.Since(start).Milliseconds() >= timeOut.Milliseconds() {
 		rf.status = Follower
 		rf.mu.Unlock()
 		return
