@@ -556,6 +556,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	// TODO:add log to ticker, debug when server is down
 	for !rf.killed() {
+		fmt.Printf("Start ticker for server:%v\n", rf.me)
 		// Check if a leader election should be started.
 		rf.mu.Lock()
 		status := rf.status
@@ -571,6 +572,7 @@ func (rf *Raft) ticker() {
 		// milliseconds.
 		//ms := 50 + (rand.Int63() % 300)
 		ms := 100
+		fmt.Printf("Server:%v ticker done and sleep for %v\n", rf.me, ms)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -739,6 +741,7 @@ func (rf *Raft) manageLeader() {
 	rf.mu.Unlock()
 	// check log replicated to most peers and acked
 	// if acked by most peers, this log can be committed to state machine and reply
+	fmt.Printf("Server:%v start to commit log\n", rf.me)
 	for n := commitIndex + 1; n <= lastLogIndex; n++ {
 		count := 0
 		total := len(peers)
@@ -749,19 +752,28 @@ func (rf *Raft) manageLeader() {
 			}
 		}
 		if count >= majority {
+			fmt.Printf("Server:%v log:%v count:%v, start commit\n", rf.me, n, count)
 			rf.mu.Lock()
 			i := rf.commitIndex + 1
-			for ; i <= n; i++ {
+			commit_cnt := 0
+			max_commit_cnt := 100
+			for ; i <= n && commit_cnt <= max_commit_cnt; i++ {
+				fmt.Printf("Server:%v commit log:%v\n", rf.me, i)
+				fmt.Printf("log buffer len:%v and commitLogIndex:%v\n", len(rf.log), i-rf.lastIndexOfSnapshot-1)
+				// FIXME:commit of i = 10 took too long and may cause heartbeat timeout
 				rf.applyMsg <- ApplyMsg{
 					CommandValid: true,
 					Command:      log[i-rf.lastIndexOfSnapshot-1].Command,
 					CommandIndex: i,
 				}
 				rf.commitIndex = rf.commitIndex + 1
+				commit_cnt++
+				fmt.Printf("Server:%v commit log:%v done, update commitIndex:%v\n", rf.me, i, rf.commitIndex)
 			}
 			rf.mu.Unlock()
 		}
 	}
+	fmt.Printf("Server:%v commit done ans start log replication\n", rf.me)
 	// do log replication here
 	for peer := range peers {
 		if peer == me {
@@ -862,5 +874,6 @@ func (rf *Raft) manageLeader() {
 				rf.matchIndex[peer] = args.LastIndex
 			}(peer)
 		}
+		fmt.Printf("Server:%v to peer:%v log replication done\n", rf.me, peer)
 	}
 }
