@@ -554,6 +554,7 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) ticker() {
+	// TODO:add log to ticker, debug when server is down
 	for !rf.killed() {
 		// Check if a leader election should be started.
 		rf.mu.Lock()
