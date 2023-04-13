@@ -432,6 +432,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// append logs from leader to current server's log batch tail
 	if len(args.Entry) > 0 {
 		rf.log = append(rf.log, args.Entry[index:]...)
+		fmt.Printf("Server:%v get log from leader and last log index is:%v\n", rf.me, rf.getLastIndex())
+		fmt.Printf("Server:%v log:%+v\n", rf.me, rf.log)
 		rf.persist()
 	}
 
@@ -440,15 +442,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderCommit > rf.commitIndex {
 		// commit log index should smaller than max log index of current server
 		min := min(args.LeaderCommit, rf.getLastIndex())
+		//COMMIT_LOOP:
 		for i := rf.commitIndex + 1; i <= min; i++ {
-			rf.commitIndex = i
-			rf.applyMsg <- ApplyMsg{
+			commit_msg := ApplyMsg{
 				CommandValid: true,
 				Command:      rf.log[i-rf.lastIndexOfSnapshot-1].Command,
 				CommandIndex: i,
 			}
+			/*select {
+			case rf.applyMsg <- commit_msgg:
+				rf.commitIndex = i
+				fmt.Printf("Slave server:%v success to commit log of index:%v\n", rf.me, i)
+			default:
+				break COMMIT_LOOP
+			}
+			*/
+			rf.applyMsg <- commit_msg
 		}
 	}
+	fmt.Printf("Server:%v commit index is:%v\n", rf.me, rf.commitIndex)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -755,9 +767,8 @@ func (rf *Raft) manageLeader() {
 			fmt.Printf("Server:%v log:%v count:%v, start commit\n", rf.me, n, count)
 			rf.mu.Lock()
 			i := rf.commitIndex + 1
-			commit_cnt := 0
-			max_commit_cnt := 100
-			for ; i <= n && commit_cnt <= max_commit_cnt; i++ {
+		LOOP:
+			for ; i <= n; i++ {
 				fmt.Printf("Server:%v commit log:%v\n", rf.me, i)
 				fmt.Printf("log buffer len:%v and commitLogIndex:%v\n", len(rf.log), i-rf.lastIndexOfSnapshot-1)
 				// unbuffered channel used here and may block the send progress, then will cause heartbeat timeout
@@ -766,9 +777,14 @@ func (rf *Raft) manageLeader() {
 					Command:      log[i-rf.lastIndexOfSnapshot-1].Command,
 					CommandIndex: i,
 				}
-				rf.commitIndex = rf.commitIndex + 1
-				commit_cnt++
-				fmt.Printf("Server:%v commit log:%v done, update commitIndex:%v\n", rf.me, i, rf.commitIndex)
+				fmt.Printf("msg is %+v\n", msg)
+				select {
+				case rf.applyMsg <- msg:
+					rf.commitIndex = rf.commitIndex + 1
+					fmt.Printf("Server:%v commit log:%v done, update commitIndex:%v\n", rf.me, i, rf.commitIndex)
+				default:
+					break LOOP
+				}
 			}
 			rf.mu.Unlock()
 		}
