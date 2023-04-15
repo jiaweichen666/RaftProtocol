@@ -760,7 +760,7 @@ func (rf *Raft) manageLeader() {
 			for ; i <= n && commit_cnt <= max_commit_cnt; i++ {
 				fmt.Printf("Server:%v commit log:%v\n", rf.me, i)
 				fmt.Printf("log buffer len:%v and commitLogIndex:%v\n", len(rf.log), i-rf.lastIndexOfSnapshot-1)
-				// FIXME:commit of i = 10 took too long and may cause heartbeat timeout
+				// unbuffered channel used here and may block the send progress, then will cause heartbeat timeout
 				rf.applyMsg <- ApplyMsg{
 					CommandValid: true,
 					Command:      log[i-rf.lastIndexOfSnapshot-1].Command,
