@@ -772,7 +772,7 @@ func (rf *Raft) manageLeader() {
 				fmt.Printf("Server:%v commit log:%v\n", rf.me, i)
 				fmt.Printf("log buffer len:%v and commitLogIndex:%v\n", len(rf.log), i-rf.lastIndexOfSnapshot-1)
 				// unbuffered channel used here and may block the send progress, then will cause heartbeat timeout
-				rf.applyMsg <- ApplyMsg{
+				msg := ApplyMsg{
 					CommandValid: true,
 					Command:      log[i-rf.lastIndexOfSnapshot-1].Command,
 					CommandIndex: i,
