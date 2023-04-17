@@ -356,7 +356,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// XLen:   log length
 	reply.Xterm = -1
 	reply.XIndex = -1
-	//FIXME: reply.Xlen = len(rf.log)
+	// reply.Xlen = len(rf.log) is not corrent
 	reply.XLen = rf.getLastIndex() + 1
 	reply.Success = false
 	reply.Term = rf.currentTerm
