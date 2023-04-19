@@ -458,6 +458,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 			*/
 			rf.applyMsg <- commit_msg
+			rf.commitIndex = i
 		}
 	}
 	fmt.Printf("Server:%v commit index is:%v\n", rf.me, rf.commitIndex)
@@ -465,6 +466,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	fmt.Printf("server %v ape call to peer:%v with %v\n", rf.me, server, ok)
 	return ok
 }
 
@@ -789,7 +791,7 @@ func (rf *Raft) manageLeader() {
 			rf.mu.Unlock()
 		}
 	}
-	fmt.Printf("Server:%v commit done ans start log replication\n", rf.me)
+	fmt.Printf("Server:%v commit done and start log replication\n", rf.me)
 	// do log replication here
 	for peer := range peers {
 		if peer == me {
@@ -803,7 +805,6 @@ func (rf *Raft) manageLeader() {
 			args.Term = rf.currentTerm
 			prevLogIndex := nextIndex[peer] - 1
 			args.PrevLogIndex = prevLogIndex
-			fmt.Printf("server:%v to peer:%v PrevlogIndex:%v and lastIndexOfSnapshot:%v\n", rf.me, peer, prevLogIndex, rf.lastIndexOfSnapshot)
 			if prevLogIndex == rf.lastIndexOfSnapshot {
 				args.PrevLogTerm = rf.lastTermOfSnapshot
 			} else {
@@ -814,11 +815,15 @@ func (rf *Raft) manageLeader() {
 			if nextIndex[peer] <= lastLogIndex {
 				args.Entry = rf.log[prevLogIndex-rf.lastIndexOfSnapshot : lastLogIndex-rf.lastIndexOfSnapshot]
 			}
+			fmt.Printf("server:%v to peer:%v PrevlogIndex:%v, LeaderCommitIndex:%v, lastIndexOfSnapshot:%v, logEntries:+%v\n", rf.me, peer, prevLogIndex, rf.commitIndex, rf.lastIndexOfSnapshot, args.Entry)
 			rf.mu.Unlock()
 
 			// execute appending entries
 			go func(peer int) {
+				fmt.Printf("server %v ape to peer:%v start\n", rf.me, peer)
+				// FIXME: i can not figure out why in test D, append entries rpc would stuck here randomlly
 				ok := rf.sendAppendEntries(peer, &args, &reply)
+				fmt.Printf("server %v ape to peer:%v with %v\n", rf.me, peer, ok)
 				if !ok {
 					fmt.Printf("server %v ape to peer:%v with no reply\n", rf.me, peer)
 					return
@@ -843,6 +848,7 @@ func (rf *Raft) manageLeader() {
 					// no conflict term
 					if reply.Xterm == -1 {
 						rf.nextIndex[peer] = reply.XLen
+						fmt.Printf("no conflict term, server%v update peer:%v next:%v\n", rf.me, peer, reply.XLen)
 						return
 					}
 					index := -1
@@ -857,14 +863,17 @@ func (rf *Raft) manageLeader() {
 						// if leader cannot find log of Xterm
 						// set peers next to XIndex to improve efficiency
 						rf.nextIndex[peer] = reply.XIndex
+						fmt.Printf("conflict term condition1, server%v update peer:%v next:%v\n", rf.me, peer, reply.XIndex)
 					} else {
 						rf.nextIndex[peer] = rf.log[index].Index
+						fmt.Printf("conflict term condition2, server%v update peer:%v next:%v\n", rf.me, peer, rf.log[index].Index)
 					}
 				}
 			}(peer)
 		} else {
 			// peer needed log index not in log buffer
 			// leader has to send snapshot to this slave
+			fmt.Printf("server%v send snapshot to peer:%v\n", rf.me, peer)
 			args := InstallSnapshotArgs{}
 			reply := InstallSnapshotReply{}
 			args.LastIndex = rf.lastIndexOfSnapshot
