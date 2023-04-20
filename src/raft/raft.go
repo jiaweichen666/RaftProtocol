@@ -769,7 +769,7 @@ func (rf *Raft) manageLeader() {
 			fmt.Printf("Server:%v log:%v count:%v, start commit\n", rf.me, n, count)
 			rf.mu.Lock()
 			i := rf.commitIndex + 1
-		LOOP:
+			// LOOP:
 			for ; i <= n; i++ {
 				fmt.Printf("Server:%v commit log:%v\n", rf.me, i)
 				fmt.Printf("log buffer len:%v and commitLogIndex:%v\n", len(rf.log), i-rf.lastIndexOfSnapshot-1)
@@ -780,13 +780,16 @@ func (rf *Raft) manageLeader() {
 					CommandIndex: i,
 				}
 				fmt.Printf("msg is %+v\n", msg)
-				select {
-				case rf.applyMsg <- msg:
-					rf.commitIndex = rf.commitIndex + 1
-					fmt.Printf("Server:%v commit log:%v done, update commitIndex:%v\n", rf.me, i, rf.commitIndex)
-				default:
-					break LOOP
-				}
+				// FIXME: it seems that use select here may cause test C fail, but if not use, test D may stuck
+				//select {
+				//case rf.applyMsg <- msg:
+				//	rf.commitIndex = rf.commitIndex + 1
+				//	fmt.Printf("Server:%v commit log:%v done, update commitIndex:%v\n", rf.me, i, rf.commitIndex)
+				//default:
+				//	break LOOP
+				//}
+				rf.applyMsg <- msg
+				rf.commitIndex = rf.commitIndex + 1
 			}
 			rf.mu.Unlock()
 		}
